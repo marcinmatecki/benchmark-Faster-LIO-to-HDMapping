@@ -1,45 +1,72 @@
-ARG ROS_DISTRO=noetic
-FROM ros:${ROS_DISTRO}-ros-base
+FROM ubuntu:20.04
+
+SHELL ["/bin/bash", "-c"]
+
 ENV DEBIAN_FRONTEND=noninteractive
 
-SHELL ["/bin/bash", "-lc"]
-
-RUN apt-get update && apt-get install -y \
-    git \
-    build-essential \
-    cmake \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl gnupg2 lsb-release software-properties-common sudo \
+    build-essential git cmake \
     python3-pip \
-    python3-colcon-common-extensions \
-    nlohmann-json3-dev \
+    libceres-dev libeigen3-dev \
     libpcl-dev \
-    libyaml-cpp-dev \
-    libtbb-dev \
-    ros-${ROS_DISTRO}-pcl-ros \
-    ros-${ROS_DISTRO}-eigen-conversions \
-    ros-${ROS_DISTRO}-tf2-eigen \
-    ros-${ROS_DISTRO}-rosbag
-RUN pip3 install rosbags
-RUN mkdir -p /test_ws/src
-COPY src/ /test_ws/src
+    nlohmann-json3-dev \
+    libusb-1.0-0-dev \
+    tmux \
+    && rm -rf /var/lib/apt/lists/*
 
-# faster-lio submodule may be empty if not initialized on host.
-# Clone it directly if the package.xml is missing.
-RUN if [ ! -f /test_ws/src/faster-lio/package.xml ]; then \
-      rm -rf /test_ws/src/faster-lio && \
-      git clone --depth 1 https://github.com/gaoxiang12/faster-lio.git /test_ws/src/faster-lio; \
-    fi
+RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+    -o /usr/share/keyrings/ros-archive-keyring.gpg
+RUN echo "deb [signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros/ubuntu $(lsb_release -cs) main" \
+    > /etc/apt/sources.list.d/ros1.list
 
-# Ensure LASzip submodule is present for the converter
-RUN if [ ! -f /test_ws/src/faster-lio-to-hdmapping/src/3rdparty/LASzip/CMakeLists.txt ]; then \
-      mkdir -p /test_ws/src/faster-lio-to-hdmapping/src/3rdparty && \
-      rm -rf /test_ws/src/faster-lio-to-hdmapping/src/3rdparty/LASzip && \
-      git clone --depth 1 --branch 3.4.3 https://github.com/LASzip/LASzip.git /test_ws/src/faster-lio-to-hdmapping/src/3rdparty/LASzip; \
-    fi
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ros-noetic-desktop-full \
+    python3-rosdep \
+    python3-catkin-tools \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN if [ ! -f /test_ws/src/livox_ros_driver/package.xml ]; then rm -rf /test_ws/src/livox_ros_driver && git clone https://github.com/Livox-SDK/livox_ros_driver.git /test_ws/src/livox_ros_driver; fi
-RUN cd /test_ws && \
-    source /opt/ros/${ROS_DISTRO}/setup.bash && \
-    rosdep update && \
-    rosdep install --from-paths src --ignore-src -r -y || true && \
-    source /opt/ros/${ROS_DISTRO}/setup.bash && \
-    colcon build
+WORKDIR /opt
+
+RUN git clone https://github.com/Livox-SDK/Livox-SDK.git && \
+    cd Livox-SDK && \
+    rm -rf build && \
+    mkdir build && \
+    cd build && \
+    cmake .. && \
+    make -j$(nproc) && \
+    make install
+
+WORKDIR /ws_livox
+
+RUN mkdir -p src
+
+WORKDIR /ws_livox/src
+
+RUN git clone https://github.com/Livox-SDK/livox_ros_driver.git
+
+WORKDIR /ws_livox
+
+RUN source /opt/ros/noetic/setup.bash && \
+    catkin_make
+
+WORKDIR /ros_ws
+
+COPY ./src ./src
+
+RUN source /opt/ros/noetic/setup.bash && \
+    source /ws_livox/devel/setup.bash && \
+    catkin_make
+    
+ARG UID=1000
+ARG GID=1000
+RUN groupadd -g $GID ros && \
+    useradd -m -u $UID -g $GID -s /bin/bash ros
+    
+WORKDIR /ros_ws
+
+RUN echo "source /opt/ros/noetic/setup.bash" >> ~/.bashrc && \
+    echo "source /ws_livox/devel/setup.bash" && >> ~/.bashrc \
+    echo "source /ros_ws/devel/setup.bash" >> ~/.bashrc
+
+CMD ["bash"]
